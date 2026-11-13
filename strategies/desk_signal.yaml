@@ -1,0 +1,20 @@
+# Desk Signal / 确定性日线评估
+# Server-side evaluate_desk_signal owns the numbers. This file only selects it.
+
+name: desk_signal
+display_name: Desk Signal
+description: 用服务端确定性规则评估 A 股日线入场门与波动阻挡。本结果不是委托。
+category: trend
+required_tools:
+  - evaluate_desk_signal
+user_invocable: true
+default_active: false
+default_router: false
+default_priority: 80
+
+instructions: |
+  当本技能被选中且讨论标的已确认时，服务端会先运行 `evaluate_desk_signal`。
+  回复正文以权威段落开头，该段落与 SSE done 事件里的结构化结果是同一结论。
+  不要另算指标数字去覆盖权威段落。均线只作为上下文，不决定入场。
+  如果工具没有给出完整的 confirmed 或 unconfirmed 评估，正文保持 unconfirmed，
+  并且不能保留模型计算的指标数字。本结果不是委托。

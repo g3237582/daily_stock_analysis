@@ -8,6 +8,7 @@ import json
 import logging
 import threading
 import uuid
+from dataclasses import replace
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,6 +40,7 @@ TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "get_skill_backtest_summary": "获取技能回测概览",
     "get_strategy_backtest_summary": "获取策略回测概览",
     "get_stock_backtest_summary": "获取个股回测数据",
+    "evaluate_desk_signal":       "评估 Desk Signal",
 }
 
 logger = logging.getLogger(__name__)
@@ -122,6 +124,23 @@ def _prepare_chat_request(request, config, session_id, session_service):
         context=_build_agent_chat_context(request, config, None),
         expected_generation=request.session_generation,
     )
+    from src.agent.tools.desk_signal import DESK_SIGNAL_SKILL_ID, unconfirmed_symbol_clarification
+    from src.report_language import normalize_report_language
+
+    skills = resolved.skill_selection.effective_skill_ids or []
+    if (
+        resolved.clarification is None
+        and DESK_SIGNAL_SKILL_ID in skills
+        and not resolved.active_stock_context
+    ):
+        language = normalize_report_language(
+            (resolved.effective_context or {}).get("report_language")
+            or getattr(config, "report_language", "zh")
+        )
+        resolved = replace(
+            resolved,
+            clarification=unconfirmed_symbol_clarification(language),
+        )
     if resolved.clarification is not None:
         accepted = session_service.commit_user_turn(resolved)
         return None, None, accepted, resolved.clarification
@@ -131,6 +150,8 @@ def _prepare_chat_request(request, config, session_id, session_service):
         selected_skill_ids=resolved.skill_selection.selected_skill_ids_update,
         resolved_turn=resolved, session_service=session_service,
     )
+    if DESK_SIGNAL_SKILL_ID in skills and resolved.active_stock_context:
+        turn = replace(turn, desk_signal_code=resolved.active_stock_context["stock_code"])
     return executor, turn, turn.accepted_snapshot, None
 
 
@@ -610,6 +631,9 @@ async def agent_chat_stream(
                 "error_code": getattr(result, "error_code", None),
                 "request_id": request_id,
             })
+            desk_signal = getattr(result, "desk_signal", None)
+            if desk_signal is not None:
+                event["desk_signal"] = desk_signal
             asyncio.run_coroutine_threadsafe(queue.put(event), loop)
         except Exception as exc:
             logger.error("Agent stream error: %s", exc)

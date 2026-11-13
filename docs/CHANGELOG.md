@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 新增只读 Agent 工具 `evaluate_desk_signal`：在内存中按显式起始日拉取 A 股前复权日线，计算确定性入场门与波动阻挡；不复用 30 根新鲜缓存短路，也不写 `stock_daily`。选中 `desk_signal` 且标的已确认时，服务端先计算，把权威段落放在回复正文开头，并在 SSE `done` 事件附上同一结构化结果。
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 

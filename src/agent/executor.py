@@ -62,6 +62,7 @@ class AgentResult:
     # Optional whitelisted snapshots for multi-agent trajectory evaluation.
     # Single-agent callers continue to receive the historical empty list.
     stage_trajectories: List[Dict[str, Any]] = field(default_factory=list)
+    desk_signal: Optional[Dict[str, Any]] = None
 
 
 # ============================================================

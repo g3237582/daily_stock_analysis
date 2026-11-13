@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 from src.agent.agent_backend import AgentBackend, AgentRunRequest
 from src.agent.conversation import conversation_manager
@@ -16,6 +19,17 @@ from src.storage import DatabaseManager
 
 if TYPE_CHECKING:
     from src.services.agent_chat_session_service import AgentChatSessionService, ResolvedChatTurn
+
+
+def _evaluate_desk_signal_first(stock_code: str):
+    """Run the read-only evaluation before the model tool loop."""
+    from src.agent.tools.desk_signal import evaluate_desk_signal
+
+    try:
+        return evaluate_desk_signal(stock_code)
+    except Exception:
+        logger.warning("Desk Signal evaluation failed for %s", stock_code, exc_info=True)
+        return None
 
 
 @dataclass(frozen=True)
@@ -30,6 +44,7 @@ class PreparedAgentChatTurn:
     user_message_id: int
     accepted_snapshot: Optional[Dict[str, Any]] = None
     db_manager: Optional[DatabaseManager] = None
+    desk_signal_code: Optional[str] = None
 
 
 class AgentChatExecutor:
@@ -147,36 +162,81 @@ class AgentChatExecutor:
         cancel_event=None,
     ) -> AgentResult:
         """Execute a previously accepted turn and persist its terminal result."""
-        backend_result = self.backend.run(
-            AgentRunRequest(
-                system_prompt=turn.prepared.system_prompt,
-                history_messages=turn.prepared.history_messages,
-                user_message=turn.message,
-                session_id=turn.session_id,
-                stock_scope=turn.prepared.stock_scope,
-                max_steps=self.max_steps,
-                max_wall_clock_seconds=self.timeout_seconds,
-                progress_callback=progress_callback,
-                cancel_event=cancel_event,
+        evaluation = None
+        if turn.desk_signal_code:
+            evaluation = _evaluate_desk_signal_first(turn.desk_signal_code)
+        try:
+            backend_result = self.backend.run(
+                AgentRunRequest(
+                    system_prompt=turn.prepared.system_prompt,
+                    history_messages=turn.prepared.history_messages,
+                    user_message=turn.message,
+                    session_id=turn.session_id,
+                    stock_scope=turn.prepared.stock_scope,
+                    max_steps=self.max_steps,
+                    max_wall_clock_seconds=self.timeout_seconds,
+                    progress_callback=progress_callback,
+                    cancel_event=cancel_event,
+                )
             )
-        )
-        total_tokens = 0
-        if isinstance(backend_result.usage, dict):
-            total_tokens = int(backend_result.usage.get("total_tokens") or 0)
+        except Exception:
+            if not turn.desk_signal_code:
+                raise
+            logger.warning("Desk Signal model loop failed for %s", turn.desk_signal_code, exc_info=True)
+            backend_result = None
+        if backend_result is None:
+            model_content = ""
+            total_tokens = 0
+            tool_calls_log: List[Dict[str, Any]] = []
+            total_steps = 0
+            provider = ""
+            model = ""
+            messages: List[Dict[str, Any]] = []
+            backend = ""
+            error_code = None
+            usage = None
+            success = False
+            content = ""
+            error = None
+        else:
+            total_tokens = 0
+            if isinstance(backend_result.usage, dict):
+                total_tokens = int(backend_result.usage.get("total_tokens") or 0)
+            model_content = backend_result.final_answer if backend_result.success else ""
+            tool_calls_log = backend_result.tool_calls_log
+            total_steps = backend_result.total_steps
+            provider = str(backend_result.diagnostics.get("provider") or backend_result.backend)
+            model = backend_result.model
+            messages = backend_result.messages
+            backend = backend_result.backend
+            error_code = backend_result.error_code
+            usage = backend_result.usage
+            success = backend_result.success
+            content = backend_result.final_answer
+            error = backend_result.error_message
+        desk_signal = None
+        if turn.desk_signal_code:
+            from src.agent.tools.desk_signal import compose_desk_signal_reply
+
+            content, desk_signal = compose_desk_signal_reply(model_content, evaluation)
+            success = True
+            error = None
+            error_code = None
         result = AgentResult(
-            success=backend_result.success,
-            content=backend_result.final_answer,
+            success=success,
+            content=content,
             dashboard=None,
-            tool_calls_log=backend_result.tool_calls_log,
-            total_steps=backend_result.total_steps,
+            tool_calls_log=tool_calls_log,
+            total_steps=total_steps,
             total_tokens=total_tokens,
-            provider=str(backend_result.diagnostics.get("provider") or backend_result.backend),
-            model=backend_result.model,
-            error=backend_result.error_message,
-            messages=backend_result.messages,
-            backend=backend_result.backend,
-            error_code=backend_result.error_code,
-            usage=backend_result.usage,
+            provider=provider,
+            model=model,
+            error=error,
+            messages=messages,
+            backend=backend,
+            error_code=error_code,
+            usage=usage,
+            desk_signal=desk_signal,
         )
 
         if result.success:

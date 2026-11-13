@@ -113,7 +113,9 @@ def test_factory_registers_tools_for_report_and_chat():
     with patch.dict(sys.modules, modules):
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
         registry = namespace["_build_tool_registry"]({"market": 35})
-    assert set(registry.list_names()) == {f"fxmacrodata_{op.name}" for op in list_operations()}
+    assert set(registry.list_names()) == {f"fxmacrodata_{op.name}" for op in list_operations()} | {
+        "evaluate_desk_signal",
+    }
 
 
 @pytest.mark.parametrize("specialist", ["intel", "risk", "portfolio"])
